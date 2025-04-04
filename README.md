@@ -1,1 +1,3 @@
-# research-paper-project
+An app which you could feed a pdf which would run an llm through it and have a summary option on the top, highlights any jarggons throughout the pdf which when pressed will show the meaning, and the concept behind it and in layman terms. All diagrams and equations has an explain button next to it, and an option to convert any paragraph or the entire paper into layman terms with examples mentioned in the paper being converted to layman examples. Also a question answering model which can be asked anything about the pdf/paper.
+Make sure to have a a gpt style llm to help ask questions through out the paper at each section
+Idea: Integrate it as a extension so that it directly shows it on the paper itself, for that work with the arix site to know how to place stuff Idea: Make this for IPYNB files too, so that each section can be tackled separately when asking questions.
