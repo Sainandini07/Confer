@@ -1,0 +1,6 @@
+pdfservices-sdk
+streamlit
+pdf2image
+openai
+python-dotenv
+pymupdf
