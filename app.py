@@ -168,13 +168,25 @@ if st.session_state.images:
         with nav3:
             st.button("➡️", on_click=lambda: update_page(1), key="next_btn")
 
-        st.selectbox(
-            "📑 Go to page:",
-            [f"Page {i + 1}" for i in range(len(st.session_state.images))],
-            index=st.session_state.current_page,
-            on_change=lambda: st.rerun(),
-            key="page_selector"
-        )
+        # st.selectbox(
+        #     "📑 Go to page:",
+        #     [f"Page {i + 1}" for i in range(len(st.session_state.images))],
+        #     index=st.session_state.current_page,
+        #     on_change=lambda: st.rerun(),
+        #     key="page_selector"
+        # )
+        selected_page = st.selectbox(
+        "📑 Go to page:",
+        [f"Page {i + 1}" for i in range(len(st.session_state.images))],
+        index=st.session_state.current_page,
+        key="page_selector"
+       )
+
+    # Only rerun if the page number actually changes
+    page_number = int(selected_page.split(" ")[1]) - 1
+    if page_number != st.session_state.current_page:
+        st.session_state.current_page = page_number
+        st.experimental_rerun()
 
     with col2:
         tab1, tab2, tab3 = st.tabs(["📄 Summary", "💬 Chat", "📝 Notes"])
@@ -193,6 +205,8 @@ if st.session_state.images:
                         st.session_state.context_type = "figure"
             except IndexError:
                 st.warning("Invalid component selected.")
+        
+
 
         context = st.session_state.get("context_text", "")
         context_type = st.session_state.get("context_type", "")

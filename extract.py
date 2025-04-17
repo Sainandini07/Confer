@@ -20,9 +20,10 @@ class ExtractTextInfoFromPDF:
     def __init__(self, output_path="output/ExtractTextInfoFromPDF/structuredData.json"):
         try:
             credentials = ServicePrincipalCredentials(
-                client_id=os.getenv('PDF_SERVICES_CLIENT_ID'),
-                client_secret=os.getenv('PDF_SERVICES_CLIENT_SECRET')
-            )
+                        client_id=os.getenv('PDF_SERVICES_CLIENT_ID'),
+                        client_secret=os.getenv('PDF_SERVICES_CLIENT_SECRET')
+                    )
+
 
             with open("extractPdfInput.pdf", "rb") as file:
                 input_stream = file.read()
