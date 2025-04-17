@@ -1,245 +1,219 @@
 import streamlit as st
 from io import BytesIO
 from pdf2image import convert_from_bytes
-import json
-import openai
-import os
-import hashlib
-import fitz  # PyMuPDF
+import fitz 
+import json, os, hashlib, base64
 from extract import ExtractTextInfoFromPDF
-from streamlit.components.v1 import html
-import base64
-from streamlit_js_eval import streamlit_js_eval
-from collections import defaultdict
 
-st.set_page_config(page_title="Confer - Research Simplified", layout="wide")
-st.markdown("<h1 style='text-align: center;'>☁️ Confer: Your Research Companion</h1>", unsafe_allow_html=True)
+def render_images(pdf):
+    b = BytesIO(pdf.read())
+    pages = convert_from_bytes(b.getvalue(), size=(612,792))
+    pdf.seek(0)
+    return pages
 
-def render_pdf_as_images(pdf_file):
-    pdf_bytes = BytesIO(pdf_file.read())
-    images = convert_from_bytes(pdf_bytes.getvalue(), size=(612, 792))
-    pdf_file.seek(0)
-    return images
+def page_sizes(pdf):
+    pdf.seek(0)
+    doc = fitz.open(stream=pdf.read(), filetype="pdf")
+    return [(p.rect.width, p.rect.height) for p in doc]
 
-def extract_page_dimensions(pdf_file):
-    pdf_file.seek(0)
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    dimensions = []
-    for page in doc:
-        rect = page.rect
-        dimensions.append((rect.width, rect.height))
-    return dimensions
+def md5sum(pdf):
+    pdf.seek(0)
+    return hashlib.md5(pdf.read()).hexdigest()
 
-def get_pdf_hash(pdf_file):
-    pdf_file.seek(0)
-    return hashlib.md5(pdf_file.read()).hexdigest()
+def parse_pdf(pdf):
+    h      = md5sum(pdf)
+    outdir = f"output/ExtractTextInfoFromPDF/{h}"
+    datafn = os.path.join(outdir, "structuredData.json")
+    if not os.path.exists(datafn):
+        os.makedirs(outdir, exist_ok=True)
+        pdf.seek(0)
+        with open("extractPdfInput.pdf","wb") as f:
+            f.write(pdf.read())
+        ExtractTextInfoFromPDF(output_path=datafn)
+    return json.load(open(datafn)), outdir
 
-def load_or_parse_pdf(pdf_file):
-    pdf_hash = get_pdf_hash(pdf_file)
-    output_dir = f"output/ExtractTextInfoFromPDF/{pdf_hash}"
-    json_path = os.path.join(output_dir, "structuredData.json")
-
-    if os.path.exists(json_path):
-        with open(json_path, 'r') as f:
-            return json.load(f), output_dir
-    else:
-        os.makedirs(output_dir, exist_ok=True)
-        pdf_file.seek(0)
-        with open("extractPdfInput.pdf", "wb") as f:
-            f.write(pdf_file.read())
-        ExtractTextInfoFromPDF(output_path=json_path)
-        with open(json_path, 'r') as f:
-            return json.load(f), output_dir
-
-def update_page(direction):
-    if direction == -1 and st.session_state.current_page > 0:
-        st.session_state.current_page -= 1
-    elif direction == 1 and st.session_state.current_page < len(st.session_state.images) - 1:
-        st.session_state.current_page += 1
+def nav(delta):
+    st.session_state.current_page = max(
+        0,
+        min(st.session_state.current_page + delta, len(st.session_state.images) - 1)
+    )
+    st.session_state.active_idx = None
     st.rerun()
 
-def generate_summary(text):
-    prompt = f"Summarize the following text in simple terms:\n{text[:2000]}"
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
-# Session Defaults
-defaults = {
+st.set_page_config("☁️ Confer · Research Companion", layout="wide")
+st.markdown(
+    "<h1 style='text-align:center;'>☁️ Confer · Your Research Companion</h1>",
+    unsafe_allow_html=True
+)
+for k,v in {
     "pdf_uploaded": False,
-    "uploaded_pdf": None,
-    "parsed_data": {},
     "images": [],
-    "page_dimensions": [],
+    "sizes": [],
+    "parsed": {},
+    "outdir": "",
     "current_page": 0,
-    "clicked_element": None,
-    "output_dir": "",
-    "context_text": "",
-    "context_type": ""
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    "active_idx": None
+}.items():
+    st.session_state.setdefault(k, v)
 
-# Upload Section
+
 if not st.session_state.pdf_uploaded:
-    st.markdown("<h2 style='text-align: center;'>📤 Upload Your Research Paper</h2>", unsafe_allow_html=True)
-    uploaded_pdf = st.file_uploader("📄 Upload your PDF file", type="pdf")
-
-    if uploaded_pdf:
+    st.header("📤 Upload a PDF")
+    # give it a visible label instead of empty string
+    up = st.file_uploader("📄 Select a PDF", type="pdf")
+    if up:
         st.session_state.pdf_uploaded = True
-        st.session_state.uploaded_pdf = uploaded_pdf
-        st.session_state.images = render_pdf_as_images(uploaded_pdf)
-        st.session_state.page_dimensions = extract_page_dimensions(uploaded_pdf)
-        parsed, output_dir = load_or_parse_pdf(uploaded_pdf)
-        st.session_state.parsed_data = parsed
-        st.session_state.output_dir = output_dir
+        st.session_state.images     = render_images(up)
+        st.session_state.sizes      = page_sizes(up)
+        st.session_state.parsed, st.session_state.outdir = parse_pdf(up)
+        st.rerun()
+    else:
+        st.stop()
+
+imgs = st.session_state.images
+w_pts, h_pts = st.session_state.sizes[st.session_state.current_page]
+elts = st.session_state.parsed.get("elements", [])
+page = st.session_state.current_page
+active = st.session_state.active_idx
+
+
+disp_w = 612
+scale_x = disp_w / w_pts
+scale_y = imgs[page].height / h_pts
+
+btns_html = []
+for i, el in enumerate(elts):
+    if el.get("Page") != page or "Bounds" not in el:
+        continue
+    l,b,r,t = el["Bounds"]
+    x = l*scale_x
+    y = (h_pts - t)*scale_y
+    w = (r-l)*scale_x
+    h = (t-b)*scale_y
+    base = ("green" if "/Figure" in el["Path"]
+            else "blue" if "/Table" in el["Path"]
+            else "red")
+    sel_border = "#FFD700" if active==i else "transparent"
+    sel_bg     = "rgba(255,215,0,0.15)" if active==i else "transparent"
+
+    btns_html.append(f'''
+      <button id="el{i}"
+        style="
+          position:absolute;
+          left:{x}px; top:{y}px;
+          width:{w}px;  height:{h}px;
+          background:{sel_bg};
+          border:2px solid {sel_border};
+          cursor:pointer; padding:0;
+        "
+        onmouseover="this.style.borderColor='{base}'"
+        onmouseout="
+          this.style.borderColor='{sel_border}';
+          this.style.background='{sel_bg}';
+        "
+      ></button>
+    ''')
+
+
+buf = BytesIO()
+imgs[page].save(buf, format="PNG")
+img64 = base64.b64encode(buf.getvalue()).decode()
+
+html_snippet = f'''
+<script>
+  if (!window._conferInit) {{
+    window._conferInit = true;
+    document.addEventListener('click', e => {{
+      const btn = e.target.closest('[id^=el]');
+      if (!btn) return;
+      const idx = +btn.id.slice(2);
+      window.parent.postMessage(
+        {{isStreamlitMessage:true, type:'streamlit:setComponentValue', value:idx}},
+        "*"
+      );
+    }});
+  }}
+</script>
+<div style="position:relative; width:{disp_w}px; height:{imgs[page].height}px;">
+  <img src="data:image/png;base64,{img64}"
+       style="width:{disp_w}px; height:{imgs[page].height}px; border:1px solid #ccc;">
+  {"".join(btns_html)}
+</div>
+'''
+
+col1, col2 = st.columns([2,1])
+
+with col1:
+    clicked = st.components.v1.html(
+        html_snippet,
+        height=imgs[page].height + 30,
+        scrolling=True,
+    )
+    if isinstance(clicked, (int,float)):
+        st.session_state.active_idx = int(clicked)
         st.rerun()
 
-# Display Page
-if st.session_state.images:
-    data = st.session_state.parsed_data
-    elements = data.get("elements", [])
-    page_num = st.session_state.current_page
-    img = st.session_state.images[page_num]
+    # navigation
+    c1, c2 = st.columns([1,1])
+    with c1:
+        if st.button("⬅️ Prev"):
+            nav(-1)
+    with c2:
+        if st.button("Next ➡️"):
+            nav(+1)
 
-    img_buf = BytesIO()
-    img.save(img_buf, format="PNG")
-    img_b64 = base64.b64encode(img_buf.getvalue()).decode()
+    sel = st.selectbox(
+        "Go to page:",
+        list(range(len(imgs))),
+        index=page,
+        format_func=lambda i:f"Page {i+1}",
+        key="page_sel"
+    )
+    if sel != page:
+        st.session_state.current_page = sel
+        st.session_state.active_idx   = None
+        st.rerun()
 
-    width_pts, height_pts = st.session_state.page_dimensions[page_num]
-    display_width = 612
-    scale_x = display_width / width_pts
-    scale_y = img.height / height_pts
-    scaled_height = img.height
+with col2:
+    tab1, tab2, tab3 = st.tabs(["📄 Summary","💬 Chat","📝 Notes"])
 
-    boxes_html = ""
-    for i, el in enumerate(elements):
-        if el.get("Page") != page_num or "Bounds" not in el:
-            continue
-        bounds = el["Bounds"]
-        left, bottom, right, top = bounds
-        x = left * scale_x
-        y = (height_pts - top) * scale_y
-        w = (right - left) * scale_x
-        h = (top - bottom) * scale_y
+    el = None
+    if st.session_state.active_idx is not None:
+        idx = st.session_state.active_idx
+        if 0 <= idx < len(elts):
+            el = elts[idx]
 
-        path = el.get("Path", "")
-        if "/Figure" in path:
-            color = "green"
-        elif "/Table" in path:
-            color = "blue"
+    with tab1:
+        st.subheader("Component Preview")
+        if not el:
+            st.info("Click an element on the left.")
         else:
-            color = "red"
-
-        boxes_html += f"""
-        <button onclick=\"window.lastClickedBoxIndex = {i}\" style="
-            position:absolute;
-            left:{x}px;
-            top:{y}px;
-            width:{w}px;
-            height:{h}px;
-            background-color:transparent;
-            border:2px solid transparent;
-            cursor:pointer;
-            padding:0;
-        " onmouseover=\"this.style.borderColor='{color}';this.style.backgroundColor='rgba(255,0,0,0.05)'\"
-          onmouseout=\"this.style.borderColor='transparent';this.style.backgroundColor='transparent'\"></button>
-        """
-
-    html_block = f"""
-    <div style='position:relative;width:{display_width}px;height:{scaled_height}px;'>
-        <img src="data:image/png;base64,{img_b64}" style="width:{display_width}px;height:{scaled_height}px;border:1px solid #ccc;">
-        {boxes_html}
-    </div>
-    <script>window.lastClickedBoxIndex = null;</script>
-    """
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        html(html_block, height=scaled_height + 30)
-        selected_index = streamlit_js_eval(js_expressions="window.lastClickedBoxIndex", key="select-idx")
-
-        nav1, nav2, nav3 = st.columns([5, 1, 1])
-        with nav2:
-            st.button("⬅️", on_click=lambda: update_page(-1), key="prev_btn")
-        with nav3:
-            st.button("➡️", on_click=lambda: update_page(1), key="next_btn")
-
-        # st.selectbox(
-        #     "📑 Go to page:",
-        #     [f"Page {i + 1}" for i in range(len(st.session_state.images))],
-        #     index=st.session_state.current_page,
-        #     on_change=lambda: st.rerun(),
-        #     key="page_selector"
-        # )
-        selected_page = st.selectbox(
-        "📑 Go to page:",
-        [f"Page {i + 1}" for i in range(len(st.session_state.images))],
-        index=st.session_state.current_page,
-        key="page_selector"
-       )
-
-    # Only rerun if the page number actually changes
-    page_number = int(selected_page.split(" ")[1]) - 1
-    if page_number != st.session_state.current_page:
-        st.session_state.current_page = page_number
-        st.experimental_rerun()
-
-    with col2:
-        tab1, tab2, tab3 = st.tabs(["📄 Summary", "💬 Chat", "📝 Notes"])
-        if selected_index is not None and isinstance(selected_index, int):
-            try:
-                el = elements[selected_index]
-                st.session_state.clicked_element = el
-                st.session_state.context_text = el.get("Text", "")
-                st.session_state.context_type = "text"
-                if not st.session_state.context_text:
-                    if "/Table" in el.get("Path", ""):
-                        st.session_state.context_text = "[TABLE]"
-                        st.session_state.context_type = "table"
-                    elif "/Figure" in el.get("Path", ""):
-                        st.session_state.context_text = "[FIGURE]"
-                        st.session_state.context_type = "figure"
-            except IndexError:
-                st.warning("Invalid component selected.")
-        
-
-
-        context = st.session_state.get("context_text", "")
-        context_type = st.session_state.get("context_type", "")
-        selected = st.session_state.get("clicked_element")
-
-        with tab1:
-            st.subheader("Component Summary")
-            if context:
-                if st.button("Summarize this component") and context_type == "text":
-                    st.write(generate_summary(context))
-                elif context_type in ["table", "figure"] and selected and "filePaths" in selected:
-                    img_path = os.path.join(st.session_state.output_dir, selected["filePaths"][0])
-                    if os.path.exists(img_path):
-                        st.image(img_path, use_column_width=True)
+            txt = el.get("Text","").strip()
+            if txt:
+                st.write(txt)
+            else:
+                fps = el.get("filePaths",[])
+                if fps:
+                    p = os.path.join(st.session_state.outdir, fps[0])
+                    if os.path.exists(p):
+                        st.image(p, use_column_width=True)
                     else:
-                        st.warning("Image not found.")
+                        st.warning("No image rendition found.")
                 else:
-                    st.info("No content to summarize.")
-            else:
-                st.info("Click on a component to summarize.")
+                    st.info("No text or image for this element.")
 
-        with tab2:
-            st.subheader("Ask about selected component")
-            if context:
-                user_question = st.text_input("Ask anything:")
-                if user_question:
-                    st.write(f"Answer to: **{user_question}** using context: {context[:100]}...")
-            else:
-                st.info("Click on a component to chat about it.")
+    with tab2:
+        st.subheader("Chat")
+        if not el:
+            st.info("Select an element first.")
+        else:
+            q = st.text_input("Ask about it:", key="chat_q")
+            if q:
+                st.write("📝 (stub) ", el.get("Text","")[:120], "…")
 
-        with tab3:
-            st.subheader("Your Notes")
-            if context:
-                st.text_area("Write notes for this section:", key="notepad", height=300)
-            else:
-                st.info("Click on a component to take notes.")
+    with tab3:
+        st.subheader("Your Notes")
+        if not el:
+            st.info("Select an element first.")
+        else:
+            st.text_area("Notes:", key="notes", height=200)
