@@ -59,7 +59,6 @@ for k,v in {
 
 if not st.session_state.pdf_uploaded:
     st.header("📤 Upload a PDF")
-    # give it a visible label instead of empty string
     up = st.file_uploader("📄 Select a PDF", type="pdf")
     if up:
         st.session_state.pdf_uploaded = True
@@ -73,8 +72,14 @@ if not st.session_state.pdf_uploaded:
 imgs = st.session_state.images
 w_pts, h_pts = st.session_state.sizes[st.session_state.current_page]
 elts = st.session_state.parsed.get("elements", [])
+
+st.session_state.setdefault("per_el_state", {})  
+def bucket(idx):
+    return st.session_state.per_el_state.setdefault(idx, {"chat": "", "notes": ""})
+
 page = st.session_state.current_page
 active = st.session_state.active_idx
+
 
 
 disp_w = 612
@@ -119,41 +124,26 @@ buf = BytesIO()
 imgs[page].save(buf, format="PNG")
 img64 = base64.b64encode(buf.getvalue()).decode()
 
-html_snippet = f'''
-<script>
-  if (!window._conferInit) {{
-    window._conferInit = true;
-    document.addEventListener('click', e => {{
-      const btn = e.target.closest('[id^=el]');
-      if (!btn) return;
-      const idx = +btn.id.slice(2);
-      window.parent.postMessage(
-        {{isStreamlitMessage:true, type:'streamlit:setComponentValue', value:idx}},
-        "*"
-      );
-    }});
-  }}
-</script>
-<div style="position:relative; width:{disp_w}px; height:{imgs[page].height}px;">
-  <img src="data:image/png;base64,{img64}"
-       style="width:{disp_w}px; height:{imgs[page].height}px; border:1px solid #ccc;">
-  {"".join(btns_html)}
-</div>
-'''
+
+
+
 
 col1, col2 = st.columns([2,1])
 
 with col1:
-    clicked = st.components.v1.html(
-        html_snippet,
-        height=imgs[page].height + 30,
-        scrolling=True,
-    )
-    if isinstance(clicked, (int,float)):
-        st.session_state.active_idx = int(clicked)
-        st.rerun()
+    st.image(imgs[page], use_container_width=True)
+    for i, el in enumerate(elts):
+        if el.get("Page") != page or "Bounds" not in el:
+            continue
 
-    # navigation
+        txt_preview = el.get("Text", "")[:100].strip()
+        if not txt_preview:
+            txt_preview = "[no text]"
+
+        if st.button(f"📍 Element {i}: {txt_preview}", key=f"el_btn_{i}"):
+            st.session_state.active_idx = i
+            st.rerun()
+
     c1, c2 = st.columns([1,1])
     with c1:
         if st.button("⬅️ Prev"):
@@ -166,16 +156,16 @@ with col1:
         "Go to page:",
         list(range(len(imgs))),
         index=page,
-        format_func=lambda i:f"Page {i+1}",
+        format_func=lambda i: f"Page {i+1}",
         key="page_sel"
     )
     if sel != page:
         st.session_state.current_page = sel
-        st.session_state.active_idx   = None
+        st.session_state.active_idx = None
         st.rerun()
 
 with col2:
-    tab1, tab2, tab3 = st.tabs(["📄 Summary","💬 Chat","📝 Notes"])
+    tab1, tab2, tab3 = st.tabs(["📄 Summary", "💬 Chat", "📝 Notes"])
 
     el = None
     if st.session_state.active_idx is not None:
@@ -183,16 +173,17 @@ with col2:
         if 0 <= idx < len(elts):
             el = elts[idx]
 
+    # Summary
     with tab1:
         st.subheader("Component Preview")
         if not el:
             st.info("Click an element on the left.")
         else:
-            txt = el.get("Text","").strip()
+            txt = el.get("Text", "").strip()
             if txt:
-                st.write(txt)
+                st.code(txt, language="markdown")
             else:
-                fps = el.get("filePaths",[])
+                fps = el.get("filePaths", [])
                 if fps:
                     p = os.path.join(st.session_state.outdir, fps[0])
                     if os.path.exists(p):
@@ -202,18 +193,26 @@ with col2:
                 else:
                     st.info("No text or image for this element.")
 
+    # Chat
     with tab2:
-        st.subheader("Chat")
+        st.subheader("Chaat")
         if not el:
             st.info("Select an element first.")
         else:
-            q = st.text_input("Ask about it:", key="chat_q")
-            if q:
-                st.write("📝 (stub) ", el.get("Text","")[:120], "…")
+            b = bucket(idx)
+            q = st.text_input("Ask about it:",
+                              key=f"chat_q_{idx}",
+                              value=b["chat"])
+            b["chat"] = q
 
+    # Notes
     with tab3:
         st.subheader("Your Notes")
         if not el:
             st.info("Select an element first.")
         else:
-            st.text_area("Notes:", key="notes", height=200)
+            b = bucket(idx)
+            b["notes"] = st.text_area("Notes:",
+                                      key=f"notes_{idx}",
+                                      value=b["notes"],
+                                      height=200)
