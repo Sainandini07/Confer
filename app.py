@@ -4,6 +4,8 @@ from pdf2image import convert_from_bytes
 import fitz 
 import json, os, hashlib, base64
 from extract import ExtractTextInfoFromPDF
+from PIL import ImageDraw, ImageFont
+from streamlit.components.v1 import html
 
 def render_images(pdf):
     b = BytesIO(pdf.read())
@@ -86,63 +88,104 @@ disp_w = 612
 scale_x = disp_w / w_pts
 scale_y = imgs[page].height / h_pts
 
-btns_html = []
-for i, el in enumerate(elts):
-    if el.get("Page") != page or "Bounds" not in el:
-        continue
-    l,b,r,t = el["Bounds"]
-    x = l*scale_x
-    y = (h_pts - t)*scale_y
-    w = (r-l)*scale_x
-    h = (t-b)*scale_y
-    base = ("green" if "/Figure" in el["Path"]
-            else "blue" if "/Table" in el["Path"]
-            else "red")
-    sel_border = "#FFD700" if active==i else "transparent"
-    sel_bg     = "rgba(255,215,0,0.15)" if active==i else "transparent"
 
-    btns_html.append(f'''
-      <button id="el{i}"
-        style="
-          position:absolute;
-          left:{x}px; top:{y}px;
-          width:{w}px;  height:{h}px;
-          background:{sel_bg};
-          border:2px solid {sel_border};
-          cursor:pointer; padding:0;
-        "
-        onmouseover="this.style.borderColor='{base}'"
-        onmouseout="
-          this.style.borderColor='{sel_border}';
-          this.style.background='{sel_bg}';
-        "
-      ></button>
-    ''')
+def draw_boxes_on_image(image, elements, page_index, active_idx=None):
+    draw = ImageDraw.Draw(image)
+
+    if active_idx is not None:
+        el = elements[active_idx]
+        if el.get("Page") == page_index and "Bounds" in el:
+            l, b, r, t = el["Bounds"]
+            x0 = l * scale_x
+            y0 = (h_pts - t) * scale_y
+            x1 = r * scale_x
+            y1 = (h_pts - b) * scale_y
+            draw.rectangle([x0, y0, x1, y1], outline="gold", width=2)
+
+    return image
+
+
 
 
 buf = BytesIO()
 imgs[page].save(buf, format="PNG")
 img64 = base64.b64encode(buf.getvalue()).decode()
 
+col0, col1, col2 = st.columns([1,2,1])
 
+with col0:
+    with st.container():
+        st.markdown("### 🧩 Components")
+        scroll = st.container()
+        with scroll:
+            for i, el in enumerate(elts):
+                if el.get("Page") != page or "Bounds" not in el:
+                    continue
+                txt_preview = el.get("Text", "")[:100].strip()
+                if not txt_preview:
+                    txt_preview = "[no text]"
+                if st.button(f"📍 Element {i}: {txt_preview}", key=f"el_btn_{i}"):
+                    st.session_state.active_idx = i
+                    st.rerun()
+    st.markdown("""
+<style>
+    div[data-testid="column"] div:has(button) {
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-
-
-col1, col2 = st.columns([2,1])
 
 with col1:
-    st.image(imgs[page], use_container_width=True)
+
+    buf = BytesIO()
+    imgs[page].save(buf, format="PNG")
+    img64 = base64.b64encode(buf.getvalue()).decode()
+
+    highlight_boxes = []
     for i, el in enumerate(elts):
         if el.get("Page") != page or "Bounds" not in el:
             continue
+        l, b, r, t = el["Bounds"]
+        x = l * scale_x
+        y = (h_pts - t) * scale_y
+        w = (r - l) * scale_x
+        h = (t - b) * scale_y
 
-        txt_preview = el.get("Text", "")[:100].strip()
-        if not txt_preview:
-            txt_preview = "[no text]"
+        border = "2px solid #FFD700" if i == active else "1px solid rgba(0,0,0,0.1)"
+        background = "rgba(255,215,0,0.15)" if i == active else "transparent"
 
-        if st.button(f"📍 Element {i}: {txt_preview}", key=f"el_btn_{i}"):
-            st.session_state.active_idx = i
-            st.rerun()
+        highlight_boxes.append(f"""
+        <div onclick="select({i})"
+            style="position:absolute; left:{x}px; top:{y}px;
+                    width:{w}px; height:{h}px;
+                    border:{border}; background:{background};
+                    cursor:pointer;">
+        </div>
+        """)
+
+    html_code = f"""
+    <div style="position:relative; width:{disp_w}px; height:{imgs[page].height}px;">
+    <img src="data:image/png;base64,{img64}"
+        style="width:{disp_w}px; height:{imgs[page].height}px; display:block;" />
+    {''.join(highlight_boxes)}
+    </div>
+    <script>
+    function select(idx) {{
+        window.parent.postMessage({{
+        isStreamlitMessage: true,
+        type: "streamlit:setComponentValue",
+        value: idx
+        }}, "*");
+    }}
+    </script>
+    """
+
+    clicked = html(html_code, height=imgs[page].height + 30)
+    if isinstance(clicked, (int, float)):
+        st.session_state.active_idx = int(clicked)
+        st.rerun()
 
     c1, c2 = st.columns([1,1])
     with c1:
