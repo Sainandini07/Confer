@@ -10,19 +10,56 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 
+st.set_page_config(
+    page_title="☁️ Confer · Research Companion",
+    layout="wide",
+    # initial_sidebar_state="collapsed"
+)
+st.markdown(
+    "<h3 style='text-align:center;'>Confer · Your Research Companion</h3>",
+    unsafe_allow_html=True
+)
+
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 st.session_state.setdefault("summaries", {})
+
+with st.sidebar:
+    st.header("User Settings")
+    st.selectbox(
+        "Select your proficiency level:",
+        ["Beginner", "Medium", "Advanced"],
+        index=1,
+        key="user_level"
+    )
+    st.text_input(
+        "Preferred teaching style:",
+        value="",
+        key="teaching_style"
+    )
+
+def get_prompt_prefix():
+    level = st.session_state.get("user_level", "Medium")
+    style = st.session_state.get("teaching_style", "").strip()
+    prefix = f"You are assisting a {level}‑level user."
+    if style:
+        prefix += f" Teaching style: {style}."
+    return prefix
+
 
 def summarize_text(text: str) -> str:
     """Ask ChatGPT to produce a concise summary using global context."""
     summary_context = st.session_state.get("global_summary", "")
     full_prompt = f"""You are a succinct summarizer. Here is the overall context of the document:{summary_context} Now, please summarize this specific section:{text}"""
+    prefix = get_prompt_prefix()
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
-            {"role": "system", "content": "You are a helpful assistant for academic summarization."},
-            {"role": "user", "content": full_prompt}
+        { "role": "system",
+            "content": f"{prefix} You are a helpful assistant for academic summarization."
+        },
+        { "role": "user",
+            "content": f"{prefix}\nHere is the overall context: {summary_context}\nNow summarize:\n{text}" }
         ],
         temperature=0.3,
         max_tokens=200
@@ -46,7 +83,6 @@ def summarize_entire_pdf(elts) -> str:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that summarizes research content."},
                 {"role": "user", "content": f"Summarize this part of a research paper:\n\n{chunk}"}
             ],
             temperature=0.3,
@@ -185,7 +221,6 @@ if not st.session_state.pdf_uploaded:
         st.session_state.sizes      = page_sizes(up)
         st.session_state.parsed, st.session_state.outdir = parse_pdf(up)
 
-        # ✅ Summarize only once when the PDF is uploaded
         with st.spinner("Summarizing the entire PDF..."):
             st.session_state["global_summary"] = summarize_entire_pdf(st.session_state.parsed.get("elements", []))
         
@@ -366,17 +401,15 @@ with tab2:
             if st.button("Send", key=f"chat_send_{idx}"):
                 with st.spinner("Thinking..."):
                     global_summary = st.session_state.get("global_summary", "")
+                    prefix = get_prompt_prefix()
                     response = client.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[
-                            {
-                                "role": "system",
-                                "content": "You are a helpful assistant answering questions about research papers."
-                            },
-                            {
-                                "role": "user",
-                                "content": f"""Here is the full summary of the paper:{global_summary}Now, here's the section the user is asking about:{text_context}User's question: {q}"""
-                            }
+                        { "role":"system",
+                            "content": f"{prefix} You are a helpful assistant answering questions about research papers."
+                        },
+                        { "role":"user",
+                            "content": f"{prefix}\nFull paper summary: {global_summary}\nSection text: {text_context}\nUser question: {q}" }
                         ],
                         temperature=0.4,
                         max_tokens=400
