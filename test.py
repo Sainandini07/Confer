@@ -37,6 +37,8 @@ with st.sidebar:
         value="",
         key="teaching_style"
     )
+    # new_pdf = st.file_uploader("Select a PDF", type="pdf", key="sidebar_pdf")
+
 
 def get_prompt_prefix():
     level = st.session_state.get("user_level", "Medium")
@@ -93,7 +95,6 @@ def summarize_entire_pdf(elts) -> str:
 
     combined_summary_text = "\n".join(intermediate_summaries)
 
-    # Final summarization pass
     final_response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -434,3 +435,9 @@ with tab2:
                                       key=f"notes_{idx}",
                                       value=b["notes"],
                                       height=200)
+            st.download_button(
+                label="Download Notes",
+                data=b["notes"],
+                file_name=f"notes_component_{idx}.txt",
+                mime="text/plain"
+            )

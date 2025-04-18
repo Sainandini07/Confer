@@ -10,32 +10,121 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-st.session_state.setdefault("summaries", {})
-
-def summarize_text(text: str) -> str:
-    """Ask ChatGPT to produce a concise summary."""
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a succinct summarizer."},
-            {"role": "user", "content": f"Please provide a brief summary of the following text:\n\n{text}"}
-        ],
-        temperature=0.3,
-        max_tokens=150
-    )
-    return response.choices[0].message.content.strip()
-
 st.set_page_config(
     page_title="☁️ Confer · Research Companion",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    # initial_sidebar_state="collapsed"
 )
 st.markdown(
     "<h3 style='text-align:center;'>Confer · Your Research Companion</h3>",
     unsafe_allow_html=True
 )
+
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+st.session_state.setdefault("summaries", {})
+
+with st.sidebar:
+    st.header("User Settings")
+    st.selectbox(
+        "Select your proficiency level:",
+        ["Beginner", "Medium", "Advanced"],
+        index=1,
+        key="user_level"
+    )
+    st.text_input(
+        "Preferred teaching style:",
+        value="",
+        key="teaching_style"
+    )
+    # new_pdf = st.file_uploader("Select a PDF", type="pdf", key="sidebar_pdf")
+
+
+def get_prompt_prefix():
+    level = st.session_state.get("user_level", "Medium")
+    style = st.session_state.get("teaching_style", "").strip()
+    prefix = f"You are assisting a {level}‑level user."
+    if style:
+        prefix += f" Teaching style: {style}."
+    return prefix
+
+
+def summarize_text(text: str) -> str:
+    """Ask ChatGPT to produce a concise summary using global context."""
+    summary_context = st.session_state.get("global_summary", "")
+    full_prompt = f"""You are a succinct summarizer. Here is the overall context of the document:{summary_context} Now, please summarize this specific section:{text}"""
+    prefix = get_prompt_prefix()
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+        { "role": "system",
+            "content": f"{prefix} You are a helpful assistant for academic summarization."
+        },
+        { "role": "user",
+            "content": f"{prefix}\nHere is the overall context: {summary_context}\nNow summarize:\n{text}" }
+        ],
+        temperature=0.3,
+        max_tokens=200
+    )
+    return response.choices[0].message.content.strip()
+      
+
+def summarize_entire_pdf(elts) -> str:
+    """Summarizes the entire PDF in chunks and then summarizes those summaries."""
+    all_text = "\n".join(el.get("Text", "") for el in elts if "Text" in el).strip()
+    if not all_text:
+        return "No extractable text found in the PDF."
+
+    chunks = chunk_text(all_text, max_chars=8000)
+    print(f"Chunk count: {len(chunks)}")
+    print(f"Chunk 0 length: {len(chunks[0])} characters")
+
+    intermediate_summaries = []
+
+    for i, chunk in enumerate(chunks):
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": f"Summarize this part of a research paper:\n\n{chunk}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        summary = response.choices[0].message.content.strip()
+        intermediate_summaries.append(summary)
+
+    combined_summary_text = "\n".join(intermediate_summaries)
+
+    final_response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that combines summaries into one final summary."},
+            {"role": "user", "content": f"Combine and summarize the following summaries:\n\n{combined_summary_text}"}
+        ],
+        temperature=0.3,
+        max_tokens=500
+    )
+
+    return final_response.choices[0].message.content.strip()
+
+def chunk_text(text, max_chars):
+    """Splits text into chunks of a specified maximum character length."""
+    words = text.split()
+    chunks = []
+    current_chunk = []
+
+    for word in words:
+        if len(" ".join(current_chunk + [word])) > max_chars:
+            chunks.append(" ".join(current_chunk))
+            current_chunk = [word]
+        else:
+            current_chunk.append(word)
+
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    return chunks
+
 
 def render_images(pdf):
     b = BytesIO(pdf.read())
@@ -61,8 +150,36 @@ def parse_pdf(pdf):
         pdf.seek(0)
         with open("extractPdfInput.pdf","wb") as f:
             f.write(pdf.read())
+        st.session_state["extracted_images"] = extract_images_from_pdf("uploaded.pdf")
         ExtractTextInfoFromPDF(output_path=datafn)
     return json.load(open(datafn)), outdir
+
+ 
+
+
+def extract_images_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    image_info_list = []
+
+    for page_index in range(len(doc)):
+        page = doc[page_index]
+        images = page.get_images(full=True)
+
+        for img_index, img in enumerate(images):
+            xref = images[img_index][0]
+            base_image = doc.extract_image(xref)
+            image_bytes = base_image["image"]
+            ext = base_image["ext"]
+
+            image_info_list.append({
+                "page": page_index,
+                "image_bytes": image_bytes,
+                "extension": ext,
+                "xref": xref
+            })
+
+    return image_info_list
+
 
 def nav(delta):
     st.session_state.current_page = max(
@@ -84,6 +201,18 @@ for k,v in {
     st.session_state.setdefault(k, v)
 
 
+# if not st.session_state.pdf_uploaded:
+#     st.header("Upload a PDF")
+#     up = st.file_uploader("Select a PDF", type="pdf")
+#     if up:
+#         st.session_state.pdf_uploaded = True
+#         st.session_state.images     = render_images(up)
+#         st.session_state.sizes      = page_sizes(up)
+#         st.session_state.parsed, st.session_state.outdir = parse_pdf(up)
+#         st.rerun()
+#     else:
+#         st.stop()
+
 if not st.session_state.pdf_uploaded:
     st.header("Upload a PDF")
     up = st.file_uploader("Select a PDF", type="pdf")
@@ -92,13 +221,20 @@ if not st.session_state.pdf_uploaded:
         st.session_state.images     = render_images(up)
         st.session_state.sizes      = page_sizes(up)
         st.session_state.parsed, st.session_state.outdir = parse_pdf(up)
+
+        with st.spinner("Summarizing the entire PDF..."):
+            st.session_state["global_summary"] = summarize_entire_pdf(st.session_state.parsed.get("elements", []))
+        
         st.rerun()
     else:
         st.stop()
 
+
 imgs = st.session_state.images
 w_pts, h_pts = st.session_state.sizes[st.session_state.current_page]
 elts = st.session_state.parsed.get("elements", [])
+
+
 
 st.session_state.setdefault("per_el_state", {})  
 def bucket(idx):
@@ -254,34 +390,38 @@ with col2:
                 st.info("No text to summarize for this component.")
 
     # Chat
-    with tab2:
-        st.subheader("Chat")
-        if not el:
-            st.info("Select an element first.")
-        else:
-            b = bucket(idx)
-            text_context = el.get("Text", "").strip()
-            q = st.text_input("Ask about this component:", key=f"chat_q_{idx}")
-            
-            if q:
-                if st.button("Send", key=f"chat_send_{idx}"):
-                    with st.spinner("Thinking..."):
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[
-                                {"role": "system", "content": "You are a helpful assistant answering questions about text content."},
-                                {"role": "user", "content": f"Here's the content:\n{text_context}\n\nUser's question: {q}"}
-                            ],
-                            temperature=0.4,
-                            max_tokens=200
-                        )
-                        b["chat"] = q
-                        b["chat_response"] = response.choices[0].message.content.strip()
-                    st.rerun()
+with tab2:
+    st.subheader("Chat")
+    if not el:
+        st.info("Select an element first.")
+    else:
+        b = bucket(idx)
+        text_context = el.get("Text", "").strip()
+        q = st.text_input("Ask about this component:", key=f"chat_q_{idx}")
+        if q:
+            if st.button("Send", key=f"chat_send_{idx}"):
+                with st.spinner("Thinking..."):
+                    global_summary = st.session_state.get("global_summary", "")
+                    prefix = get_prompt_prefix()
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                        { "role":"system",
+                            "content": f"{prefix} You are a helpful assistant answering questions about research papers."
+                        },
+                        { "role":"user",
+                            "content": f"{prefix}\nFull paper summary: {global_summary}\nSection text: {text_context}\nUser question: {q}" }
+                        ],
+                        temperature=0.4,
+                        max_tokens=400
+                    )
+                    b["chat"] = q
+                    b["chat_response"] = response.choices[0].message.content.strip()
+                st.rerun()
+        if b.get("chat_response"):
+            st.markdown("**Response:**")
+            st.markdown(b["chat_response"])
 
-            if b.get("chat_response"):
-                st.markdown("**Response:**")
-                st.markdown(b["chat_response"])
 
 
     # Notes
@@ -295,3 +435,9 @@ with col2:
                                       key=f"notes_{idx}",
                                       value=b["notes"],
                                       height=200)
+            st.download_button(
+                label="Download Notes",
+                data=b["notes"],
+                file_name=f"notes_component_{idx}.txt",
+                mime="text/plain"
+            )
