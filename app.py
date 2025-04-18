@@ -6,6 +6,36 @@ import json, os, hashlib, base64
 from extract import ExtractTextInfoFromPDF
 from PIL import ImageDraw, ImageFont
 from streamlit.components.v1 import html
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+st.session_state.setdefault("summaries", {})
+
+def summarize_text(text: str) -> str:
+    """Ask ChatGPT to produce a concise summary."""
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a succinct summarizer."},
+            {"role": "user", "content": f"Please provide a brief summary of the following text:\n\n{text}"}
+        ],
+        temperature=0.3,
+        max_tokens=150
+    )
+    return response.choices[0].message.content.strip()
+
+st.set_page_config(
+    page_title="☁️ Confer · Research Companion",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+st.markdown(
+    "<h3 style='text-align:center;'>Confer · Your Research Companion</h3>",
+    unsafe_allow_html=True
+)
 
 def render_images(pdf):
     b = BytesIO(pdf.read())
@@ -42,11 +72,6 @@ def nav(delta):
     st.session_state.active_idx = None
     st.rerun()
 
-st.set_page_config("☁️ Confer · Research Companion", layout="wide")
-st.markdown(
-    "<h1 style='text-align:center;'>☁️ Confer · Your Research Companion</h1>",
-    unsafe_allow_html=True
-)
 for k,v in {
     "pdf_uploaded": False,
     "images": [],
@@ -60,8 +85,8 @@ for k,v in {
 
 
 if not st.session_state.pdf_uploaded:
-    st.header("📤 Upload a PDF")
-    up = st.file_uploader("📄 Select a PDF", type="pdf")
+    st.header("Upload a PDF")
+    up = st.file_uploader("Select a PDF", type="pdf")
     if up:
         st.session_state.pdf_uploaded = True
         st.session_state.images     = render_images(up)
@@ -111,30 +136,18 @@ buf = BytesIO()
 imgs[page].save(buf, format="PNG")
 img64 = base64.b64encode(buf.getvalue()).decode()
 
-col0, col1, col2 = st.columns([1,2,1])
+col1, col2 = st.columns([2,1])
 
-with col0:
-    with st.container():
-        st.markdown("### 🧩 Components")
-        scroll = st.container()
-        with scroll:
-            for i, el in enumerate(elts):
-                if el.get("Page") != page or "Bounds" not in el:
-                    continue
-                txt_preview = el.get("Text", "")[:100].strip()
-                if not txt_preview:
-                    txt_preview = "[no text]"
-                if st.button(f"📍 Element {i}: {txt_preview}", key=f"el_btn_{i}"):
-                    st.session_state.active_idx = i
-                    st.rerun()
-    st.markdown("""
-<style>
-    div[data-testid="column"] div:has(button) {
-        max-height: 80vh;
-        overflow-y: auto;
-    }
-</style>
-""", unsafe_allow_html=True)
+with st.sidebar:
+    st.header("Components")
+    for i, el in enumerate(elts):
+        if el.get("Page") != page or "Bounds" not in el:
+            continue
+        txt_preview = el.get("Text", "")[:100].strip() or "[no text]"
+        if st.button(f"{i}: {txt_preview}", key=f"el_btn_{i}"):
+            st.session_state.active_idx = i
+            st.rerun()
+
 
 
 with col1:
@@ -208,7 +221,7 @@ with col1:
         st.rerun()
 
 with col2:
-    tab1, tab2, tab3 = st.tabs(["📄 Summary", "💬 Chat", "📝 Notes"])
+    tab1, tab2, tab3 = st.tabs(["Summary", "Chat", "Notes"])
 
     el = None
     if st.session_state.active_idx is not None:
@@ -225,28 +238,51 @@ with col2:
             txt = el.get("Text", "").strip()
             if txt:
                 st.code(txt, language="markdown")
+
+                if st.button("Summarize this", key=f"summarize_{idx}"):
+                    with st.spinner("Summarizing…"):
+                        summary = summarize_text(txt)
+                        st.session_state["summaries"][idx] = summary
+                    st.rerun()
+
+                summary = st.session_state["summaries"].get(idx)
+                if summary:
+                    st.markdown("**Summary:**")
+                    st.markdown(summary)
+
             else:
-                fps = el.get("filePaths", [])
-                if fps:
-                    p = os.path.join(st.session_state.outdir, fps[0])
-                    if os.path.exists(p):
-                        st.image(p, use_column_width=True)
-                    else:
-                        st.warning("No image rendition found.")
-                else:
-                    st.info("No text or image for this element.")
+                st.info("No text to summarize for this component.")
 
     # Chat
     with tab2:
-        st.subheader("Chaat")
+        st.subheader("Chat")
         if not el:
             st.info("Select an element first.")
         else:
             b = bucket(idx)
-            q = st.text_input("Ask about it:",
-                              key=f"chat_q_{idx}",
-                              value=b["chat"])
-            b["chat"] = q
+            text_context = el.get("Text", "").strip()
+            q = st.text_input("Ask about this component:", key=f"chat_q_{idx}")
+            
+            if q:
+                if st.button("Send", key=f"chat_send_{idx}"):
+                    with st.spinner("Thinking..."):
+                        response = client.chat.completions.create(
+                            model="gpt-3.5-turbo",
+                            messages=[
+                                {"role": "system", "content": "You are a helpful assistant answering questions about text content."},
+                                {"role": "user", "content": f"Here's the content:\n{text_context}\n\nUser's question: {q}"}
+                            ],
+                            temperature=0.4,
+                            max_tokens=200
+                        )
+                        b["chat"] = q
+                        b["chat_response"] = response.choices[0].message.content.strip()
+                    st.rerun()
+
+            if b.get("chat_response"):
+                st.markdown("**Response:**")
+                st.markdown(b["chat_response"])
+
 
     # Notes
     with tab3:
