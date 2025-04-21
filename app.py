@@ -37,7 +37,6 @@ with st.sidebar:
         value="",
         key="teaching_style"
     )
-    # new_pdf = st.file_uploader("Select a PDF", type="pdf", key="sidebar_pdf")
 
 
 def get_prompt_prefix():
@@ -200,18 +199,6 @@ for k,v in {
 }.items():
     st.session_state.setdefault(k, v)
 
-
-# if not st.session_state.pdf_uploaded:
-#     st.header("Upload a PDF")
-#     up = st.file_uploader("Select a PDF", type="pdf")
-#     if up:
-#         st.session_state.pdf_uploaded = True
-#         st.session_state.images     = render_images(up)
-#         st.session_state.sizes      = page_sizes(up)
-#         st.session_state.parsed, st.session_state.outdir = parse_pdf(up)
-#         st.rerun()
-#     else:
-#         st.stop()
 
 if not st.session_state.pdf_uploaded:
     st.header("Upload a PDF")
